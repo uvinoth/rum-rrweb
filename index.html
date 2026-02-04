@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Simple RUM Page</title>
+</head>
+<body>
+  <h1>Real User Monitoring</h1>
+  <p>Interact with the page to generate events.</p>
+  <button onclick="alert('Button clicked')" style="background-color: blue; color: white;">Click Me</button>
+  <button onclick="alert('Blue Button clicked')" style="color: blue;">Blue</button>
+  <button onclick="alert('Red Button clicked')" style="color: red;">Red</button>
+  
+
+  <!-- rrweb library -->
+  <script src="https://cdn.jsdelivr.net/npm/rrweb@latest/dist/rrweb.min.js"></script>
+
+  <!-- RUM Script -->
+  <script>
+    (function () {
+      const baseUrl = "http://127.0.0.1:8001";
+      const orgId = 1;
+      
+
+      let events = [];
+      const sessionId = "id" + Math.random().toString(16).slice(2);
+
+      rrweb.record({
+        emit(event) {
+          events.push(event);
+
+          if (events.length >= 10) {
+            fetch(baseUrl + "/api/v1/rum/events", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: sessionId,
+                events: events,
+                orgId: orgId
+              })
+            });
+
+            events = [];
+          }
+        }
+      });
+
+      window.addEventListener("flutterError", function (e) {
+        let data = {};
+        try {
+          data = JSON.parse(e.detail);
+        } catch (_) {}
+
+        fetch(baseUrl + "/api/v1/consumer/inferenz/rum/errors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: sessionId,
+            orgId: orgId,
+            ...data
+          })
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

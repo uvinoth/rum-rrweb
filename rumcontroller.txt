@@ -1,0 +1,219 @@
+
+
+// Push Event godoc
+// @Summary      Push RUM Event Data
+// @Description  Ingest Real User Monitoring (RUM) events for a given organization
+// @Tags         Real User Monitoring
+// @Accept       json
+// @Produce      json
+// @Param        rum body dto.EventRequest true "Event Data"
+// @Success      201  {object}  map[string]interface{} "message: Events ingested successfully"
+// @Failure      400  {object}  map[string]interface{} "error: Bad request"
+// @Failure      422  {object}  map[string]interface{} "error: Unprocessable Entity"
+// @Failure      500  {object}  map[string]interface{} "error: Internal Server Error"
+// @Router       /api/v1/consumer/inferenz/rum/events [post]
+func (api *inferenzController) RumEvents(ctx *gin.Context) {
+	var req dto.EventRequest
+
+	api.logger.Debug("Rum Events data", zap.Any("rum_event_request", req))
+
+	// Bind JSON
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+
+	api.logger.Debug("Event data", zap.Any("event_request", req))
+
+	var rumEndpoint models.Rum
+	err := api.db.Where("org_id = ? AND endpoint_id = ?", req.OrgId, req.EndpointID).First(&rumEndpoint).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		ctx.JSON(http.StatusNotFound, exception.ResourceNotFound("Endpoint", fmt.Sprintf("Endpoint '%d' not found", req.EndpointID)))
+		return
+	} else if err != nil {
+		ctx.JSON(http.StatusInternalServerError, exception.InternalServerError(err.Error()))
+		return
+	}
+
+	// Default session_id
+	if req.SessionID == "" {
+		req.SessionID = "unknown"
+	}
+
+	// Validate events
+	if len(req.Events) == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "no events provided"})
+		return
+	}
+
+	// Insert via service
+	if err := api.service.CreateEvent(req, req.OrgId); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save events"})
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, gin.H{
+		"message":         "events created successfully",
+		"events_received": len(req.Events),
+	})
+}
+
+// Push Error Event godoc
+// @Summary      Push RUM Error Event Data
+// @Description  Ingest Real User Monitoring (RUM) events for a given organization
+// @Tags         Real User Monitoring
+// @Accept       json
+// @Produce      json
+// @Param        rum body dto.ErrorLogRequest true "Event Data"
+// @Success      201  {object}  map[string]interface{} "message: Error Events ingested successfully"
+// @Failure      400  {object}  map[string]interface{} "error: Bad request"
+// @Failure      422  {object}  map[string]interface{} "error: Unprocessable Entity"
+// @Failure      500  {object}  map[string]interface{} "error: Internal Server Error"
+// @Router       /api/v1/consumer/inferenz/rum/error/events [post]
+func (api *inferenzController) RumErrorEvents(ctx *gin.Context) {
+	var req dto.ErrorLogRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+
+	api.logger.Debug("Error Event data", zap.Any("error_event_request", req))
+
+	// Default session_id if missing
+	if req.SessionID == "" {
+		req.SessionID = "unknown"
+	}
+
+	if err := api.service.CreateErrorLog(req, req.OrgID); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save error log"})
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, gin.H{
+		"status":  "error_logged",
+		"session": req.SessionID,
+	})
+}
+
+// Get Event godoc
+// @Summary      Get RUM Event Data
+// @Description  Get Real User Monitoring (RUM) error events for a given organization
+// @Tags         Real User Monitoring
+// @Accept       json
+// @Produce      json
+// @Param        org path int true "Organization"
+// @Param        sessionId path string true "session Id"
+// @Success      201  {object}  map[string]interface{} "message: Get Events successfully"
+// @Failure      400  {object}  map[string]interface{} "error: Bad request"
+// @Failure      422  {object}  map[string]interface{} "error: Unprocessable Entity"
+// @Failure      500  {object}  map[string]interface{} "error: Internal Server Error"
+// @Router       /api/v1/consumer/inferenz/rum/{org}/{sessionId}/events [get]
+func (api *inferenzController) GetSessionEvents(ctx *gin.Context) {
+	org := ctx.Param("org")
+	sessionId := ctx.Param("sessionId")
+
+	orgId, err := strconv.ParseInt(org, 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Org ID"})
+		return
+	}
+
+	events, total, err := api.service.GetEventsBySession(int32(orgId), sessionId)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch error events"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"events":     events,
+		"total":      total,
+		"session_id": sessionId,
+	})
+
+}
+
+// Get Error Event godoc
+// @Summary      Get RUM Error Event Data
+// @Description  Get Real User Monitoring (RUM) error events for a given organization and session
+// @Tags         Real User Monitoring
+// @Accept       json
+// @Produce      json
+// @Param        org path int true "Organization"
+// @Param        sessionId path string true "Session ID"
+// @Success      200  {object}  map[string]interface{} "message: Get Events successfully"
+// @Failure      400  {object}  map[string]interface{} "error: Bad request"
+// @Failure      422  {object}  map[string]interface{} "error: Unprocessable Entity"
+// @Failure      500  {object}  map[string]interface{} "error: Internal Server Error"
+// @Router       /api/v1/consumer/inferenz/rum/{org}/{sessionId}/error/events [get]
+func (api *inferenzController) GetSessionError(ctx *gin.Context) {
+	org := ctx.Param("org")
+	sessionId := ctx.Param("sessionId")
+
+	orgId, err := strconv.ParseInt(org, 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Org ID"})
+		return
+	}
+
+	errorsList, total, err := api.service.GetErrorEventsBySession(int32(orgId), sessionId)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch error events"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"errors":     errorsList,
+		"total":      total,
+		"session_id": sessionId,
+	})
+}
+
+// Get Event session godoc
+// @Summary      Get RUM event session  Data
+// @Description  Get Real User Monitoring (RUM) error events for a given organization and session
+// @Tags         Real User Monitoring
+// @Accept       json
+// @Produce      json
+// @Param        org path int true "Organization"
+// @Param        endpoint path int true "Endpoint ID"
+// @Param        eventType   query  string true "Rum status" Enums(Event, Error)
+// @Success      200  {object}  map[string]interface{} "message: Get Events session successfully"
+// @Failure      400  {object}  map[string]interface{} "error: Bad request"
+// @Failure      422  {object}  map[string]interface{} "error: Unprocessable Entity"
+// @Failure      500  {object}  map[string]interface{} "error: Internal Server Error"
+// @Router       /api/v1/consumer/inferenz/rum/{org}/session/{endpoint} [get]
+func (api *inferenzController) GetEventSessionId(ctx *gin.Context) {
+	org := ctx.Param("org")
+	endpoint := ctx.Param("endpoint")
+
+	orgId, err := strconv.ParseInt(org, 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Org ID"})
+		return
+	}
+
+	endpointId, err := strconv.ParseInt(endpoint, 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Endpoint ID"})
+		return
+	}
+
+	eventType := ctx.Query("eventType")
+
+	sessionStats, err := api.service.GetEventSessionStats(int32(orgId), int32(endpointId), eventType)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch error events"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"sessionStats": sessionStats,
+	})
+}
+
+
+pip install fastapi uvicorn sqlalchemy pydantic
+
+python3 -m venv .venv
+source .venv/bin/activate
